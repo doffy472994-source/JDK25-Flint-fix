@@ -33,6 +33,7 @@ include NativeCompilation.gmk
 FindSrcDirsForComponent += \
   $(call uniq, $(wildcard \
       $(TOPDIR)/src/$(strip $1)/$(OPENJDK_TARGET_OS)/native/$(strip $2) \
+      $(TOPDIR)/src/$(strip $1)/linux/native/$(strip $2) \
       $(TOPDIR)/src/$(strip $1)/$(OPENJDK_TARGET_OS_TYPE)/native/$(strip $2) \
       $(TOPDIR)/src/$(strip $1)/share/native/$(strip $2)))
 

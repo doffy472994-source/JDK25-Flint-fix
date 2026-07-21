@@ -70,7 +70,7 @@
 // by defining binary compatible statx structs in this file and
 // not relying on included headers.
 
-#ifndef __GLIBC__
+#if !defined(__GLIBC__) && !defined(__ANDROID__)
 // Alpine doesn't know these types, define them
 typedef unsigned int       __uint32_t;
 typedef unsigned short     __uint16_t;
@@ -223,6 +223,42 @@ static fdopendir_func* my_fdopendir_func = NULL;
 static statx_func* my_statx_func = NULL;
 #endif
 
+#ifdef __ANDROID__
+/*
+ * TODO: Android lacks support for the methods listed below.  In it's place are
+ * alternatives that use existing Android functionality, but lack reentrant
+ * support.  Determine if the following are the most suitable alternatives.
+ *
+ */
+int getgrgid_r(gid_t gid, struct group* grp, char* buf, size_t buflen, struct group** result) {
+
+  *result = NULL;
+  errno = 0;
+  grp = getgrgid(gid);
+  if (grp == NULL) {
+        return errno;
+  }
+  // buf not used by caller (see below)
+  *result = grp;
+  return 0;
+}
+
+int getgrnam_r(const char *name, struct group* grp, char* buf, size_t buflen, struct group** result) {
+
+  *result = NULL;
+  errno = 0;
+  grp = getgrnam(name);
+  if (grp == NULL) {
+        return errno;
+  }
+  // buf not used by caller (see below)
+  *result = grp;
+  return 0;
+
+}
+#endif
+
+
 /**
  * fstatat missing from glibc on Linux.
  */
@@ -265,6 +301,15 @@ static void throwUnixException(JNIEnv* env, int errnum) {
         (*env)->Throw(env, x);
     }
 }
+
+#if defined(__linux__)
+static int test_statx(void) {
+   struct my_statx statxbuf;
+   int res = statx_wrapper(0, "/", AT_STATX_SYNC_AS_STAT, LOCAL_STATX_ALL, &statxbuf);
+   if (res == 0) return 1; // Yeah sure whatever
+   return errno != ENOSYS;
+}
+#endif
 
 /**
  * Initialization
@@ -383,8 +428,10 @@ Java_sun_nio_fs_UnixNativeDispatcher_init(JNIEnv* env, jclass this)
 #endif
 #if defined(__linux__)
     my_statx_func = (statx_func*) dlsym(RTLD_DEFAULT, "statx");
-    if (my_statx_func != NULL) {
+    if (my_statx_func != NULL && test_statx()) {
         capabilities |= sun_nio_fs_UnixNativeDispatcher_SUPPORTS_BIRTHTIME;
+    } else {
+        my_statx_func = NULL;
     }
 #endif
 

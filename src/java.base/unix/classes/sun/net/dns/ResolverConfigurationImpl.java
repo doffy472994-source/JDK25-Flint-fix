@@ -63,8 +63,9 @@ public final class ResolverConfigurationImpl
         ArrayList<String> ll = new ArrayList<>();
 
         try {
+            String resolvPath = System.getProperty("ext.net.resolvPath", "/etc/resolv.conf");
             BufferedReader in =
-                new BufferedReader(new FileReader("/etc/resolv.conf"));
+                new BufferedReader(new FileReader(resolvPath));
             String line;
             while ((line = in.readLine()) != null) {
                 int maxvalues = maxperkeyword;

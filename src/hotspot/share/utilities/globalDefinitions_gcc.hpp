@@ -59,6 +59,10 @@
 #include <limits.h>
 #include <errno.h>
 
+#if defined(__ANDROID__) && !defined(ANDROID)
+#define ANDROID 1
+#endif
+
 #if defined(LINUX) || defined(_ALLBSD_SOURCE) || defined(_AIX)
 #include <signal.h>
 #ifndef __OpenBSD__

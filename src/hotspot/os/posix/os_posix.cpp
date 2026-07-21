@@ -83,7 +83,9 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef __ANDROID__
 #include <utmpx.h>
+#endif
 
 #ifdef __APPLE__
   #include <crt_externs.h>
@@ -547,6 +549,7 @@ void os::Posix::print_load_average(outputStream* st) {
 // unfortunately it does not work on macOS and Linux because the utx chain has no entry
 // for reboot at least on my test machines
 void os::Posix::print_uptime_info(outputStream* st) {
+#ifndef __ANDROID__
   int bootsec = -1;
   time_t currsec = time(nullptr);
   struct utmpx* ent;
@@ -561,6 +564,7 @@ void os::Posix::print_uptime_info(outputStream* st) {
   if (bootsec != -1) {
     os::print_dhm(st, "OS uptime:", currsec-bootsec);
   }
+#endif
 }
 
 static void print_rlimit(outputStream* st, const char* msg,
@@ -1998,11 +2002,31 @@ int os::fork_and_exec(const char* cmd) {
   const char* argv[4] = {"sh", "-c", cmd, nullptr};
   pid_t pid = -1;
   char** env = os::get_environ();
+#ifndef __ANDROID__
   // Note: cast is needed because posix_spawn() requires - for compatibility with ancient
   // C-code - a non-const argv/envp pointer array. But it is fine to hand in literal
   // strings and just cast the constness away. See also ProcessImpl_md.c.
   int rc = ::posix_spawn(&pid, "/bin/sh", nullptr, nullptr, (char**) argv, env);
   if (rc == 0) {
+#else
+  pid = ::fork();
+
+  if (pid < 0) {
+    // fork failed
+    return -1;
+
+  } else if (pid == 0) {
+    // child process
+
+    ::execve("/bin/sh", (char* const*)argv, env);
+
+    // execve failed
+    ::_exit(-1);
+
+  } else  {
+    // copied from J2SE ..._waitForProcessExit() in UNIXProcess_md.c; we don't
+    // care about the actual exit code, for now.
+#endif
     int status;
     // Wait for the child process to exit.  This returns immediately if
     // the child has already exited. */
@@ -2027,9 +2051,11 @@ int os::fork_and_exec(const char* cmd) {
       // Unknown exit code; pass it through
       return status;
     }
+#ifndef __ANDROID__
   } else {
     // Don't log, we are inside error handling
     return -1;
+#endif
   }
 }
 

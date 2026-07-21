@@ -137,7 +137,7 @@
 
 #define MAX_PATH    (2 * K)
 
-#ifdef MUSL_LIBC
+#if defined(MUSL_LIBC) || defined(__ANDROID__)
 // dlvsym is not a part of POSIX
 // and musl libc doesn't implement it.
 static void *dlvsym(void *handle,
@@ -214,6 +214,8 @@ static malloc_info_func_t g_malloc_info = nullptr;
 // such as when the VM was created by one of the standard java launchers, we can
 // avoid this
 static bool suppress_primordial_thread_resolution = false;
+
+static bool read_so_path_from_maps(const char* so_name, char* buf, int buflen);
 
 // utility functions
 
@@ -479,12 +481,14 @@ bool os::Linux::get_tick_information(CPUPerfTicks* pticks, int which_logical_cpu
 
 #ifndef SYS_gettid
 // i386: 224, amd64: 186, sparc: 143
-  #if defined(__i386__)
+  #if defined(__i386__) || defined(__arm__)
     #define SYS_gettid 224
   #elif defined(__amd64__)
     #define SYS_gettid 186
   #elif defined(__sparc__)
     #define SYS_gettid 143
+  #elif defined(__arm64__) || defined(__aarch64__)
+    #define SYS_gettid 178
   #else
     #error "Define SYS_gettid for this architecture"
   #endif
@@ -668,6 +672,7 @@ void os::init_system_properties_values() {
 // detecting pthread library
 
 void os::Linux::libpthread_init() {
+#ifndef __ANDROID__
   // Save glibc and pthread version strings.
 #if !defined(_CS_GNU_LIBC_VERSION) || \
     !defined(_CS_GNU_LIBPTHREAD_VERSION)
@@ -691,6 +696,9 @@ void os::Linux::libpthread_init() {
   str = (char *)malloc(n, mtInternal);
   confstr(_CS_GNU_LIBPTHREAD_VERSION, str, n);
   os::Linux::set_libpthread_version(str);
+#endif
+#else
+  os::Linux::set_libpthread_version("NPTL");
 #endif
 }
 
@@ -1540,7 +1548,13 @@ int os::current_process_id() {
 
 // This must be hard coded because it's the system's temporary
 // directory not the java application's temp directory, ala java.io.tmpdir.
-const char* os::get_temp_directory() { return "/tmp"; }
+const char* os::get_temp_directory() {
+#ifndef __ANDROID__
+  return "/tmp";
+#else
+  return "/data/tmp";
+#endif
+}
 
 // check if addr is inside libjvm.so
 bool os::address_is_in_vm(address addr) {
@@ -1612,6 +1626,30 @@ bool os::dll_address_to_library_name(address addr, char* buf,
   }
   buf[0] = '\0';
   if (offset) *offset = -1;
+  return false;
+}
+
+static bool read_so_path_from_maps(const char* so_name, char* buf, int buflen) {
+  FILE *fp = fopen("/proc/self/maps", "r");
+  assert(fp, "Failed to open /proc/self/maps");
+  if (!fp) {
+    return false;
+  }
+
+  char maps_buffer[2048];
+  while (fgets(maps_buffer, 2048, fp) != NULL) {
+    if (strstr(maps_buffer, so_name) == NULL) {
+      continue;
+    }
+
+    char *so_path = strchr(maps_buffer, '/');
+    so_path[strlen(so_path) - 1] = '\0'; // Cut trailing \n
+    jio_snprintf(buf, buflen, "%s", so_path);
+    fclose(fp);
+    return true;
+  }
+
+  fclose(fp);
   return false;
 }
 
@@ -2007,6 +2045,7 @@ void * os::Linux::dll_load_in_vmthread(const char *filename, char *ebuf,
 }
 
 const char* os::Linux::dll_path(void* lib) {
+#ifdef RTLD_DI_LINKMAP
   struct link_map *lmap;
   const char* l_path = nullptr;
   assert(lib != nullptr, "dll_path parameter must not be null");
@@ -2016,6 +2055,9 @@ const char* os::Linux::dll_path(void* lib) {
     l_path = lmap->l_name;
   }
   return l_path;
+#else
+  return NULL;
+#endif
 }
 
 static unsigned count_newlines(const char* s) {
@@ -2808,6 +2850,20 @@ void os::jvm_path(char *buf, jint buflen) {
                                          CAST_FROM_FN_PTR(address, os::jvm_path),
                                          dli_fname, sizeof(dli_fname), nullptr);
   assert(ret, "cannot locate libjvm");
+
+#ifdef __ANDROID__
+  if (dli_fname[0] == '\0') {
+    return;
+  }
+
+  if (strchr(dli_fname, '/') == NULL) {
+    bool ok = read_so_path_from_maps(dli_fname, buf, buflen);
+    assert(ok, "unable to turn relative libjvm.so path into absolute");
+    return;
+  }
+
+  snprintf(buf, buflen, /* "%s/lib/%s/server/%s", java_home_var, cpu_arch, */ "%s", dli_fname);
+#else // !__ANDROID__
   char *rp = nullptr;
   if (ret && dli_fname[0] != '\0') {
     rp = os::realpath(dli_fname, buf, buflen);
@@ -2852,6 +2908,7 @@ void os::jvm_path(char *buf, jint buflen) {
       }
     }
   }
+#endif
 
   strncpy(saved_jvm_path, buf, MAXPATHLEN);
   saved_jvm_path[MAXPATHLEN - 1] = '\0';
@@ -3213,7 +3270,8 @@ void os::Linux::sched_getcpu_init() {
   }
 
   if (sched_getcpu() == -1) {
-    vm_exit_during_initialization("getcpu(2) system call not supported by kernel");
+    // vm_exit_during_initialization
+    warning("getcpu(2) system call not supported by kernel");
   }
 }
 
@@ -5207,7 +5265,46 @@ bool os::is_thread_cpu_time_supported() {
 // Linux doesn't yet have a (official) notion of processor sets,
 // so just return the system wide load average.
 int os::loadavg(double loadavg[], int nelem) {
-  return ::getloadavg(loadavg, nelem);
+#ifndef __ANDROID__
+   return ::getloadavg(loadavg, nelem);
+#else
+/*
+ * Copyright (C) 2018 The Android Open Source Project
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
+  if (nelem < 0) return -1;
+  if (nelem > 3) nelem = 3;
+  struct sysinfo si;
+  if (sysinfo(&si) == -1) return -1;
+  for (int i = 0; i < nelem; ++i) {
+    loadavg[i] = static_cast<double>(si.loads[i]) / static_cast<double>(1 << SI_LOAD_SHIFT);
+  }
+  return nelem;
+#endif
 }
 
 // Get the default path to the core file

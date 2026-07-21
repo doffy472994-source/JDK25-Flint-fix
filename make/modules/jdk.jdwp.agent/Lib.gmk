@@ -74,7 +74,7 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBJDWP, \
         include \
         libjdwp/export \
         java.base:libjava, \
-    JDK_LIBS := java.base:libjvm, \
+    JDK_LIBS := java.base:libjvm java.base:libtinyiconv, \
     LIBS := $(ICONV_LIBS), \
     LIBS_linux := $(LIBDL), \
 ))

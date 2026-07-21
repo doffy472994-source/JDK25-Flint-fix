@@ -22,6 +22,7 @@
 
 #include "defs.S.inc"
 
+#ifndef __ANDROID__
         // JavaThread::aarch64_get_thread_helper()
         //
         // Return the current thread pointer in x0.
@@ -44,6 +45,7 @@ DECLARE_FUNC(_ZN10JavaThread25aarch64_get_thread_helperEv):
         ret
 
         .size _ZN10JavaThread25aarch64_get_thread_helperEv, .-_ZN10JavaThread25aarch64_get_thread_helperEv
+#endif
 
 /* Emit .note.gnu.property section in case of PAC or BTI being enabled.
  * For more details see "ELF for the Arm(R) 64-bit Architecture (AArch64)".

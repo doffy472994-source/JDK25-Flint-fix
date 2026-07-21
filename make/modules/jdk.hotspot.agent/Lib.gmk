@@ -80,6 +80,6 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBSAPROC, \
     LIBS_windows := dbgeng.lib, \
 ))
 
-TARGETS += $(BUILD_LIBSAPROC)
+# TARGETS += $(BUILD_LIBSAPROC)
 
 ################################################################################
